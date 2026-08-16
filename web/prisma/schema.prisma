@@ -1,0 +1,336 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ─── BetterAuth required tables ─────────────────────────────────────────────
+// Shapes follow saas-starter-kit/packages/db/prisma/schema.prisma exactly —
+// don't hand-modify without checking `bunx @better-auth/cli generate` first.
+
+model User {
+  id            String    @id @default(cuid())
+  name          String
+  email         String    @unique
+  emailVerified Boolean   @default(false)
+  image         String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  sessions      Session[]
+  accounts      Account[]
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  expiresAt DateTime
+  token     String   @unique
+  ipAddress String?
+  userAgent String?
+  userId    String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// accessToken/refreshToken hold the Google OAuth tokens (Gmail + Calendar
+// scopes). Next.js is the sole authority for these — see boundary rule 2 in
+// documents/plan.md. FastAPI never reads this table directly; it only ever
+// receives a short-lived access token per request.
+model Account {
+  id           String    @id @default(cuid())
+  accountId    String
+  providerId   String
+  userId       String
+  accessToken  String?   @db.Text
+  refreshToken String?   @db.Text
+  idToken      String?   @db.Text
+  expiresAt    DateTime?
+  password     String?   @db.Text
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([providerId, accountId])
+}
+
+model Verification {
+  id         String   @id @default(cuid())
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([identifier, value])
+}
+
+// ─── Workspace + knowledge base ─────────────────────────────────────────────
+// Single workspace for v1 (multi-tenancy is deferred — see plan). Everything
+// else hangs off it so that isn't a hard assumption baked into every model.
+
+model Workspace {
+  id              String   @id @default(cuid())
+  name            String
+  personaName     String   @default("Alex")
+  tone            String?
+  offer           String?  @db.Text
+  icp             String?  @db.Text
+  dryRun          Boolean  @default(true)
+  dailySendCap    Int      @default(20)
+  hubspotPortalId String?
+  slackWebhookUrl String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  knowledgeDocs KnowledgeDoc[]
+  leads         Lead[]
+  campaigns     Campaign[]
+  calls         Call[]
+}
+
+model KnowledgeDoc {
+  id         String   @id @default(cuid())
+  workspaceId String
+  title      String
+  sourceType String // "pdf" | "url" | "text"
+  sourceUrl  String?
+  createdAt  DateTime @default(now())
+
+  workspace Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  chunks    KnowledgeChunk[]
+}
+
+// The vector itself lives in Qdrant, keyed by qdrantPointId — Postgres stays
+// the source of truth so the index can always be rebuilt from here.
+model KnowledgeChunk {
+  id            String   @id @default(cuid())
+  docId         String
+  content       String   @db.Text
+  qdrantPointId String   @unique
+  chunkIndex    Int
+  createdAt     DateTime @default(now())
+
+  doc KnowledgeDoc @relation(fields: [docId], references: [id], onDelete: Cascade)
+}
+
+// ─── Leads, campaigns, email ────────────────────────────────────────────────
+
+enum LeadSource {
+  call
+  email
+  manual
+}
+
+enum LeadStatus {
+  new
+  researching
+  queued
+  contacted
+  replied
+  meeting_booked
+  disqualified
+  unsubscribed
+}
+
+model Lead {
+  id               String     @id @default(cuid())
+  workspaceId      String
+  hubspotContactId String?    @unique
+  email            String
+  name             String?
+  title            String?
+  company          String?
+  source           LeadSource @default(manual)
+  status           LeadStatus @default(new)
+  enrichment       Json?
+  lastSyncedAt     DateTime?
+  createdAt        DateTime   @default(now())
+  updatedAt        DateTime   @updatedAt
+
+  workspace     Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  campaignLeads CampaignLead[]
+  emailMessages EmailMessage[]
+  meetings      Meeting[]
+  calls         Call[]
+  followUpTasks FollowUpTask[]
+  suppression   Suppression?
+}
+
+model Campaign {
+  id        String   @id @default(cuid())
+  workspaceId String
+  name      String
+  icp       String?  @db.Text
+  offer     String?  @db.Text
+  autoSend  Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  workspace     Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  campaignLeads CampaignLead[]
+}
+
+// Per-lead run state within a campaign's sequence. `status` is deliberately
+// a loose string rather than an enum — the follow-up sequence engine
+// (Phase 7) owns its own step vocabulary and it's cheaper to let that evolve
+// than to migrate an enum every time a step is added.
+model CampaignLead {
+  id         String   @id @default(cuid())
+  campaignId String
+  leadId     String
+  step       Int      @default(0)
+  status     String   @default("pending")
+  createdAt  DateTime @default(now())
+
+  campaign Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  lead     Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  @@unique([campaignId, leadId])
+}
+
+enum EmailDirection {
+  inbound
+  outbound
+}
+
+enum EmailStatus {
+  draft
+  pending_approval
+  sent
+  failed
+  suppressed
+}
+
+model EmailMessage {
+  id             String         @id @default(cuid())
+  leadId         String
+  direction      EmailDirection
+  status         EmailStatus    @default(draft)
+  gmailThreadId  String?
+  gmailMessageId String?
+  subject        String
+  body           String         @db.Text
+  // KnowledgeChunk ids the agent cited when drafting — surfaced in the
+  // dashboard so a draft's claims are checkable, not just plausible-looking.
+  citedChunkIds  String[]       @default([])
+  sentAt         DateTime?
+  createdAt      DateTime       @default(now())
+
+  lead Lead @relation(fields: [leadId], references: [id], onDelete: Cascade)
+}
+
+model Meeting {
+  id               String   @id @default(cuid())
+  leadId           String
+  calendarEventId  String?
+  hubspotMeetingId String?
+  startsAt         DateTime
+  endsAt           DateTime
+  attendees        String[] @default([])
+  sourceCallId     String?  @unique
+  createdAt        DateTime @default(now())
+
+  lead       Lead  @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  sourceCall Call? @relation(fields: [sourceCallId], references: [id])
+}
+
+model FollowUpTask {
+  id            String    @id @default(cuid())
+  leadId        String
+  hubspotTaskId String?
+  title         String
+  dueAt         DateTime?
+  completed     Boolean   @default(false)
+  createdAt     DateTime  @default(now())
+
+  lead Lead @relation(fields: [leadId], references: [id], onDelete: Cascade)
+}
+
+// Hard block list, checked immediately before every send — not just at draft
+// time. See Guardrails in documents/plan.md.
+model Suppression {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  leadId    String?  @unique
+  reason    String // "unsubscribed" | "bounced" | "manual" | "not_interested"
+  createdAt DateTime @default(now())
+
+  lead Lead? @relation(fields: [leadId], references: [id])
+}
+
+// Append-only feed of everything the agent(s) did — what makes the demo
+// legible rather than a black box.
+model ActivityLog {
+  id          String   @id @default(cuid())
+  workspaceId String?
+  leadId      String?
+  callId      String?
+  type        String // e.g. "email.sent", "call.booked", "lead.replied"
+  message     String
+  metadata    Json?
+  createdAt   DateTime @default(now())
+}
+
+// ─── Voice calls ─────────────────────────────────────────────────────────
+// See "The voice call (hero feature)" in documents/plan.md for the full
+// session lifecycle this table tracks.
+
+enum CallStatus {
+  pending
+  live
+  completed
+  failed
+}
+
+enum CallOutcome {
+  booked
+  qualified
+  not_fit
+  abandoned
+}
+
+model Call {
+  id              String       @id @default(cuid())
+  workspaceId     String
+  leadId          String?
+  // Single-use token minted by POST /api/voice/session; FastAPI validates
+  // and consumes it before starting the Gemini Live session.
+  token           String       @unique
+  tokenConsumedAt DateTime?
+  status          CallStatus   @default(pending)
+  outcome         CallOutcome?
+  startedAt       DateTime?
+  endedAt         DateTime?
+  durationSeconds Int?
+  qualification   Json?
+  sentiment       String?
+  consentGiven    Boolean      @default(false)
+  // Gemini Live session_resumption handle, so a call that outlives one Live
+  // session (see go_away handling in the plan) can reconnect transparently.
+  resumptionHandle String?     @db.Text
+  createdAt       DateTime     @default(now())
+
+  workspace Workspace  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  lead      Lead?      @relation(fields: [leadId], references: [id])
+  turns     CallTurn[]
+  meeting   Meeting?
+}
+
+enum CallTurnRole {
+  user
+  agent
+}
+
+model CallTurn {
+  id            String       @id @default(cuid())
+  callId        String
+  role          CallTurnRole
+  text          String       @db.Text
+  citedChunkIds String[]     @default([])
+  toolCalls     Json?
+  createdAt     DateTime     @default(now())
+
+  call Call @relation(fields: [callId], references: [id], onDelete: Cascade)
+}

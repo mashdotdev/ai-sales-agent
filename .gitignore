@@ -1,0 +1,13 @@
+# Env files — never commit real secrets. web/ and backend/ each have their
+# own .gitignore too; this is the top-level safety net.
+.env
+.env.*
+!.env.example
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+*.swp
+
+# Claude Code local settings (if any end up at this level)
+.claude/settings.local.json
