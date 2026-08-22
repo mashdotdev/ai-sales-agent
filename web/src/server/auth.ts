@@ -19,7 +19,7 @@ export const auth = betterAuth({
   secret: process.env.BETTER_AUTH_SECRET,
   emailAndPassword: {
     enabled: true,
-    requireEmailVerification: true,
+    requireEmailVerification: false,
     sendResetPassword: async ({ user, url }) => {
       await getResend().emails.send({
         from: process.env.RESEND_FROM_EMAIL ?? "onboarding@resend.dev",

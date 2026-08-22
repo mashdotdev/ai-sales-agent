@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 
-from routers import agent, health
+from routers import agent, health, knowledge
 
 app = FastAPI(
     title="AI Sales Employee",
@@ -9,3 +9,4 @@ app = FastAPI(
 
 app.include_router(health.router)
 app.include_router(agent.router)
+app.include_router(knowledge.router)

@@ -21,8 +21,10 @@ class Settings(BaseSettings):
         "postgresql+asyncpg://sales_agent:sales_agent_dev@localhost:5432/sales_agent"
     )
 
-    # Qdrant
+    # Qdrant Cloud (Phase 2) — free-tier clusters require an API key, unlike
+    # the local Docker Qdrant Phase 0/1 were written against.
     qdrant_url: str = "http://localhost:6333"
+    qdrant_api_key: str = ""
     qdrant_collection: str = "company_knowledge"
 
     # Shared secret for Next.js -> FastAPI calls (never exposed to the browser).

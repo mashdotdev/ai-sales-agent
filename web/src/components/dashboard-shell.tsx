@@ -2,6 +2,7 @@
 
 import { signOut, requestGoogleWorkspaceAccess } from "@/lib/auth-client";
 import { useRouter } from "next/navigation";
+import { KnowledgeSection } from "@/components/knowledge-section";
 
 export function DashboardShell({
   userName,
@@ -51,10 +52,11 @@ export function DashboardShell({
         </div>
       </section>
 
+      <KnowledgeSection />
+
       <section className="rounded border border-dashed p-4 text-sm text-foreground/60">
-        Knowledge base, leads, campaigns, and calls land here in later phases —
-        this is the Phase 1 shell, just enough to exercise sign-up, sign-in,
-        and the Google Workspace connect flow end to end.
+        Leads, campaigns, and calls land here in later phases — this section
+        is the remaining Phase 1 placeholder.
       </section>
     </main>
   );

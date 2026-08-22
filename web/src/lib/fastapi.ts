@@ -20,7 +20,9 @@ export async function fastapi(path: string, init: RequestInit = {}): Promise<Res
 
   const headers = new Headers(init.headers);
   headers.set("X-Internal-Secret", INTERNAL_API_SECRET);
-  if (init.body && !headers.has("Content-Type")) {
+  // FormData bodies (file uploads) need `fetch` to set Content-Type itself,
+  // multipart boundary included — setting it here would break the upload.
+  if (init.body && !headers.has("Content-Type") && !(init.body instanceof FormData)) {
     headers.set("Content-Type", "application/json");
   }
 
